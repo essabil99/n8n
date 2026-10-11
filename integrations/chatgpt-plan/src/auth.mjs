@@ -35,6 +35,7 @@ export class TokenStore {
 	constructor(directory, options = {}) {
 		this.directory = directory;
 		this.fetch = options.fetch ?? fetch;
+		this.codeExchangeFetch = options.codeExchangeFetch;
 		this.verify = options.verify ?? verifyIdentity;
 		this.now = options.now ?? Date.now;
 		this.pending = new Map();
@@ -59,7 +60,7 @@ export class TokenStore {
 			if (
 				!this.credentials.client_id ||
 				!this.credentials.subject ||
-				!this.credentials.access_token
+				(!this.credentials.access_token && !this.credentials.reauthorization_required)
 			) {
 				throw new BridgeError(
 					500,
@@ -67,6 +68,19 @@ export class TokenStore {
 					'The saved ChatGPT connection is invalid.',
 				);
 			}
+		} catch (error) {
+			if (error.code !== 'ENOENT') throw error;
+		}
+		try {
+			const registration = JSON.parse(
+				await readFile(join(this.directory, 'retry-registration.json'), 'utf8'),
+			);
+			if (
+				registration.host_id === this.hostId &&
+				typeof registration.client_id === 'string' &&
+				registration.client_id.startsWith('oaiapp_')
+			)
+				this.retryClientId = registration.client_id;
 		} catch (error) {
 			if (error.code !== 'ENOENT') throw error;
 		}
@@ -86,8 +100,12 @@ export class TokenStore {
 
 	status() {
 		return {
-			authenticated: Boolean(this.credentials),
-			plan_authorized: Boolean(this.credentials?.scopes?.includes(PLAN_SCOPE)),
+			authenticated: Boolean(this.credentials && !this.credentials.reauthorization_required),
+			reauthorization_required: Boolean(this.credentials?.reauthorization_required),
+			plan_authorized: Boolean(
+				!this.credentials?.reauthorization_required &&
+				this.credentials?.scopes?.includes(PLAN_SCOPE),
+			),
 			email: this.credentials?.email ?? null,
 		};
 	}
@@ -110,6 +128,7 @@ export class TokenStore {
 		this.pending.set(state, {
 			nonce,
 			verifier,
+			createdAt: this.now(),
 			redirectUri,
 			clientId,
 			subject: this.credentials?.subject,
@@ -129,6 +148,8 @@ export class TokenStore {
 		});
 		if (!clientId) parameters.set('agent_name_hint', 'n8n ChatGPT plan bridge');
 		if (this.credentials?.id_token) parameters.set('id_token_hint', this.credentials.id_token);
+		if (this.credentials && !this.credentials.scopes?.includes(PLAN_SCOPE))
+			parameters.set('prompt', 'consent');
 		return `${ISSUER}/api/accounts/authorize?${parameters}`;
 	}
 
@@ -147,6 +168,7 @@ export class TokenStore {
 		}
 		const clientId = attempt.clientId ?? parameters.client_id;
 		if (
+			typeof parameters.code !== 'string' ||
 			!parameters.code ||
 			typeof clientId !== 'string' ||
 			!clientId ||
@@ -161,6 +183,15 @@ export class TokenStore {
 		}
 		// Keep the issued registration for invalid_grant recovery. It authorizes no inference by itself.
 		this.retryClientId = clientId;
+		await this.atomicWrite(
+			'retry-registration.json',
+			JSON.stringify({ client_id: clientId, host_id: this.hostId }),
+		);
+		this.exchangeContext = {
+			location: this.codeExchangeFetch ? 'browser_computer' : 'vm',
+			authorization_age_ms: this.now() - attempt.createdAt,
+			callback_code_has_whitespace: /\s/.test(parameters.code),
+		};
 		const token = await this.tokenRequest({
 			grant_type: 'authorization_code',
 			client_id: clientId,
@@ -178,11 +209,9 @@ export class TokenStore {
 			);
 		}
 		const scopes = typeof token.scope === 'string' ? token.scope.split(/\s+/) : [];
-		if (!scopes.includes(PLAN_SCOPE)) {
-			throw new BridgeError(403, 'plan_not_authorized', 'ChatGPT plan access was not granted.');
-		}
 		await this.save({
 			model: this.credentials?.model,
+			reauthorization_required: false,
 			issuer: ISSUER,
 			subject: identity.sub,
 			email: identity.email ?? null,
@@ -190,16 +219,16 @@ export class TokenStore {
 			ext_agent_host_id: this.hostId,
 			id_token: token.id_token,
 			scopes,
-			...this.tokenFields(token),
+			...this.tokenFields(token, scopes.includes(PLAN_SCOPE)),
 		});
 	}
 
-	tokenFields(token) {
+	tokenFields(token, requireRefresh = true) {
 		if (
 			typeof token.access_token !== 'string' ||
 			!token.access_token ||
-			typeof token.refresh_token !== 'string' ||
-			!token.refresh_token ||
+			(requireRefresh && (typeof token.refresh_token !== 'string' || !token.refresh_token)) ||
+			!Number.isFinite(Number(token.expires_in)) ||
 			!(Number(token.expires_in) > 0)
 		) {
 			throw new BridgeError(
@@ -214,7 +243,7 @@ export class TokenStore {
 				: Date.parse(token.earliest_refresh_at ?? '') || 0;
 		return {
 			access_token: token.access_token,
-			refresh_token: token.refresh_token,
+			refresh_token: token.refresh_token ?? null,
 			token_type: 'Bearer',
 			expires_at: this.now() + Number(token.expires_in) * 1000,
 			earliest_refresh_at: earliest,
@@ -223,28 +252,25 @@ export class TokenStore {
 
 	async tokenRequest(parameters) {
 		let response;
-		for (let attempt = 0; attempt < 3; attempt++) {
-			try {
-				response = await this.fetch(TOKEN_ENDPOINT, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/x-www-form-urlencoded',
-						'User-Agent': 'n8n-chatgpt-plan-bridge/0.1.0',
-					},
-					body: new URLSearchParams(parameters),
-					signal: AbortSignal.timeout(30_000),
-				});
-				if (response.status < 500 || attempt === 2) break;
-				await response.body?.cancel();
-			} catch {
-				if (attempt === 2)
-					throw new BridgeError(
-						503,
-						'auth_unreachable',
-						'ChatGPT sign-in is temporarily unavailable.',
-					);
-			}
-			await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+		const isCodeExchange = parameters.grant_type === 'authorization_code';
+		// Both codes and rotating refresh tokens can be consumed by a lost response.
+		const attempts = 1;
+		const transport =
+			isCodeExchange && this.codeExchangeFetch ? this.codeExchangeFetch : this.fetch;
+		try {
+			response = await transport(TOKEN_ENDPOINT, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/x-www-form-urlencoded',
+					'User-Agent': 'n8n-chatgpt-plan-bridge/0.1.0',
+				},
+				body: new URLSearchParams(parameters),
+				signal: AbortSignal.timeout(30_000),
+				redirect: 'error',
+			});
+		} catch (error) {
+			if (error instanceof BridgeError) throw error;
+			throw new BridgeError(503, 'auth_unreachable', 'ChatGPT sign-in is temporarily unavailable.');
 		}
 		if (!response.ok) {
 			let body;
@@ -275,6 +301,7 @@ export class TokenStore {
 				phase: refreshing ? 'refresh' : 'code_exchange',
 				http_status: response.status,
 				provider_code: code,
+				request_id: response.headers.get('x-request-id'),
 			};
 			if (!refreshing) {
 				// This private diagnostic excludes the submitted code, verifier, client ID, and other grant values.
@@ -294,8 +321,35 @@ export class TokenStore {
 					.slice(0, 500);
 				await this.atomicWrite(
 					'last-oauth-error.json',
-					JSON.stringify({ ...this.lastAuthError, description }),
+					JSON.stringify({
+						...this.lastAuthError,
+						...this.exchangeContext,
+						description,
+						request_id: response.headers.get('x-request-id'),
+						response_fields: body && typeof body === 'object' ? Object.keys(body) : [],
+						attempts,
+					}),
 				);
+			}
+			if (
+				refreshing &&
+				new Set([
+					'invalid_grant',
+					'invalid_refresh_token',
+					'token_expired',
+					'refresh_token_expired',
+					'refresh_token_invalidated',
+					'refresh_token_reused',
+				]).has(code)
+			) {
+				// Keep the validated profile, account hint, and registration; discard unusable tokens.
+				await this.save({
+					...this.credentials,
+					access_token: null,
+					refresh_token: null,
+					expires_at: 0,
+					reauthorization_required: true,
+				});
 			}
 			throw new BridgeError(
 				response.status >= 500
@@ -322,6 +376,20 @@ export class TokenStore {
 	}
 
 	async accessToken() {
+		if (this.credentials?.reauthorization_required) {
+			throw new BridgeError(
+				401,
+				'reauthorization_required',
+				'This ChatGPT connection expired. Sign in again from the local page.',
+			);
+		}
+		if (this.credentials && !this.credentials.scopes?.includes(PLAN_SCOPE)) {
+			throw new BridgeError(
+				403,
+				'plan_not_authorized',
+				'Identity sign-in succeeded, but ChatGPT plan usage is not authorized. Enable eligible plan access from the local connection page.',
+			);
+		}
 		if (!this.credentials?.scopes?.includes(PLAN_SCOPE)) {
 			throw new BridgeError(
 				401,

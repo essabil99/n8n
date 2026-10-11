@@ -1,3 +1,5 @@
+import pLimit from 'p-limit';
+
 import type { Logger } from '../logger';
 import {
 	readWorkspaceFile,
@@ -84,15 +86,18 @@ export async function loadPrebakedWorkspaceBundle<TBundle extends { files: Map<s
 			const payloadPaths = Array.from(bundle.files.keys()).filter(
 				(path) => path !== options.manifestPath,
 			);
+			const limit = pLimit(8);
 			const existenceChecks = await Promise.all(
-				payloadPaths.map(async (path) => ({
-					path,
-					exists:
-						(await readWorkspaceFile(options.workspace, path, {
-							logger: options.logger,
-							resourceLabel: options.resourceLabel,
-						})) !== null,
-				})),
+				payloadPaths.map((path) =>
+					limit(async () => ({
+						path,
+						exists:
+							(await readWorkspaceFile(options.workspace, path, {
+								logger: options.logger,
+								resourceLabel: options.resourceLabel,
+							})) !== null,
+					})),
+				),
 			);
 			const missingPath = existenceChecks.find((check) => !check.exists)?.path;
 			if (missingPath) {

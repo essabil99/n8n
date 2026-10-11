@@ -145,6 +145,7 @@ describe('ChatGPT connection', () => {
 			phase: 'code_exchange',
 			http_status: 400,
 			provider_code: 'invalid_grant',
+			request_id: null,
 		});
 		expect(store.status().authenticated).toBe(false);
 		const retry = new URL(store.start('http://127.0.0.1:1455/auth/callback'));
@@ -211,7 +212,7 @@ describe('ChatGPT connection', () => {
 			}),
 		).rejects.toThrow('state');
 	});
-	it('rejects incorrect state and missing plan scope without replacing a connection', async () => {
+	it('rejects incorrect state and retains a verified sign-in without plan permission', async () => {
 		const tokenFetch = vi.fn(async () =>
 			Response.json({
 				access_token: 'new',
@@ -231,10 +232,11 @@ describe('ChatGPT connection', () => {
 		const url = new URL(store.start('http://127.0.0.1:1455/auth/callback'));
 		expect(url.searchParams.get('client_id')).toBe('oaiapp_test');
 		expect(url.searchParams.has('agent_name_hint')).toBe(false);
-		await expect(
-			store.exchange({ state: url.searchParams.get('state'), code: 'code' }),
-		).rejects.toThrow('not granted');
-		expect(store.credentials.access_token).toBe('test-access');
+		await store.exchange({ state: url.searchParams.get('state'), code: 'code' });
+		expect(store.status()).toMatchObject({ authenticated: true, plan_authorized: false });
+		await expect(store.accessToken()).rejects.toThrow('not authorized');
+		const reconsent = new URL(store.start('http://127.0.0.1:1455/auth/callback'));
+		expect(reconsent.searchParams.get('prompt')).toBe('consent');
 	});
 	it('validates the real JWT signature, issuer, audience, and nonce', async () => {
 		const { publicKey, privateKey } = await generateKeyPair('RS256');
@@ -381,8 +383,16 @@ describe('bridge routes', () => {
 		expect(response.body).toContain('"call_id":"call_1"');
 	});
 	it('returns usage limits without a paid fallback or a retry', async () => {
-		const upstream = vi.fn(
-			async () => new Response('private error', { status: 429, headers: { 'Retry-After': '300' } }),
+		const upstream = vi.fn(async () =>
+			Response.json(
+				{
+					error: {
+						code: 'subscription_sharing_usage_limit_exceeded',
+						message: 'ChatGPT plan usage limit reached.',
+					},
+				},
+				{ status: 429, headers: { 'Retry-After': '300' } },
+			),
 		);
 		const { infer } = await newServers({ fetchImpl: upstream });
 		const response = await infer.inject({

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/consistent-type-imports */
 /* eslint-disable @typescript-eslint/no-require-imports */
 import { ensureUrlPathSuffix, isOpenAiCustomEndpoint } from '@n8n/ai-utilities/model-discovery';
-import type { EmbeddingModel, LanguageModel } from 'ai';
+import { wrapLanguageModel, type EmbeddingModel, type LanguageModel } from 'ai';
 import type * as Undici from 'undici';
 
 import {
@@ -263,6 +263,29 @@ const LANGUAGE_PROVIDERS: ProviderRegistry = {
 			const { createOpenAI } = require('@ai-sdk/openai') as typeof import('@ai-sdk/openai');
 			const { apiStyle, ...providerCreds } = creds;
 			const { baseURL } = providerCreds;
+			// This explicit bridge alias uses stateless plan inference. Apply the options before
+			// the provider converts history, so encrypted reasoning is replayed in full.
+			if (model === 'chatgpt-plan' && baseURL) {
+				return wrapLanguageModel({
+					model: createOpenAI({ ...providerCreds, fetch })(model),
+					middleware: {
+						specificationVersion: 'v4',
+						transformParams: async ({ params }) => ({
+							...params,
+							providerOptions: {
+								...params.providerOptions,
+								openai: {
+									...params.providerOptions?.openai,
+									store: false,
+									forceReasoning: true,
+									include: ['reasoning.encrypted_content'],
+								},
+							},
+						}),
+					},
+				});
+			}
+
 			// The official API serves /responses, which the provider's default model
 			// targets. OpenAI credentials also carry that base URL. `isOpenAiCustomEndpoint`
 			// reads the model-discovery host list, so a host added there to fix a model

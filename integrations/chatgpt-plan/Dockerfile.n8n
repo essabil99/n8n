@@ -1,0 +1,5 @@
+FROM n8nio/n8n:2.42.6
+USER root
+COPY runtime /tmp/chatgpt-plan-runtime
+RUN node /tmp/chatgpt-plan-runtime/install-stateless-model.cjs && node /tmp/chatgpt-plan-runtime/install-sandbox-concurrency.cjs && rm -rf /tmp/chatgpt-plan-runtime
+USER node

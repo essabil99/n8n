@@ -6,6 +6,7 @@ export default [
 		languageOptions: {
 			globals: Object.fromEntries(
 				[
+					'__dirname',
 					'process',
 					'console',
 					'Buffer',

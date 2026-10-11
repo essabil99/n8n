@@ -1,9 +1,13 @@
 const statusElement = document.getElementById('status');
 const login = document.getElementById('login');
-login.addEventListener('click', async () => {
+async function signIn() {
 	login.disabled = true;
 	try {
-		const response = await fetch('/auth/start', { method: 'POST' });
+		const response = await fetch('/auth/start', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({}),
+		});
 		const value = await response.json();
 		if (!response.ok) throw new Error(value.error?.message ?? 'Sign-in could not start.');
 		window.location.href = value.url;
@@ -11,13 +15,18 @@ login.addEventListener('click', async () => {
 		statusElement.textContent = error.message;
 		login.disabled = false;
 	}
-});
+}
+login.addEventListener('click', () => signIn());
 async function loadStatus() {
 	const response = await fetch('/auth/status');
 	const value = await response.json();
 	statusElement.textContent = value.plan_authorized
 		? `Connected${value.email ? ` as ${value.email}` : ''}. Selected model: ${value.model}.`
-		: 'Sign in to authorize ChatGPT plan access.';
+		: value.reauthorization_required
+			? 'This connection expired. Sign in again.'
+			: value.authenticated
+				? 'Identity sign-in succeeded. ChatGPT plan usage is not authorized.'
+				: 'Sign in to authorize ChatGPT plan access.';
 	if (!value.plan_authorized) return;
 	login.textContent = 'Reconnect with ChatGPT';
 	const modelResponse = await fetch('/auth/models');

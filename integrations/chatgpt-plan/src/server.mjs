@@ -21,7 +21,23 @@ const REQUEST_SCHEMA = {
 	additionalProperties: true,
 };
 
+class UpstreamError extends Error {
+	constructor(status, body, headers) {
+		super('ChatGPT rejected the request.');
+		this.status = status;
+		this.body = body;
+		this.requestId = headers.get('x-request-id');
+		this.retryAfter = headers.get('retry-after');
+	}
+}
+
 function errorHandler(error, request, reply) {
+	if (error instanceof UpstreamError) {
+		if (error.requestId) reply.header('X-Request-Id', error.requestId);
+		if (error.retryAfter) reply.header('Retry-After', error.retryAfter);
+		return reply.code(error.status).send(error.body);
+	}
+
 	if (error instanceof BridgeError) {
 		if (error.retryAfter) reply.header('Retry-After', error.retryAfter);
 		return reply
@@ -56,7 +72,7 @@ export async function createServers({
 		throw new Error('CHATGPT_BRIDGE_API_KEY must contain at least 24 characters.');
 	const infer = Fastify({
 		logger: false,
-		bodyLimit: 10 * 1024 * 1024,
+		bodyLimit: 32 * 1024 * 1024,
 		requestTimeout: 300_000,
 		ajv: { customOptions: { coerceTypes: false } },
 	});
@@ -122,21 +138,23 @@ export async function createServers({
 			);
 		}
 		if (!response.ok) {
-			await response.body?.cancel();
-			const messages = {
-				401: 'The ChatGPT connection is no longer valid. Sign in again.',
-				403: 'This ChatGPT account, workspace, or model is not eligible for this request.',
-				429: 'The ChatGPT plan usage limit was reached. Wait before trying again.',
-			};
-			const error = new BridgeError(
-				response.status,
-				'chatgpt_request_rejected',
-				messages[response.status] ??
-					'ChatGPT rejected this request. Check the selected model and supported parameters.',
-			);
-			error.retryAfter = response.headers.get('retry-after');
-			throw error;
+			// Preserve provider codes, params, and admission detail bodies for n8n's error handling.
+			let body;
+			try {
+				const text = (await response.text())
+					.split(token)
+					.join('[redacted]')
+					.split(apiKey)
+					.join('[redacted]');
+				body = JSON.parse(text);
+			} catch {
+				body = {
+					error: { code: 'chatgpt_request_rejected', message: 'ChatGPT rejected this request.' },
+				};
+			}
+			throw new UpstreamError(response.status, body, response.headers);
 		}
+
 		return response;
 	}
 

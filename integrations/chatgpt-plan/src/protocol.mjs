@@ -41,6 +41,12 @@ export function normalizeRequest(request, selectedModel) {
 	result.input = input.map((item) =>
 		item?.role === 'system' ? { ...item, role: 'developer' } : item,
 	);
+	// Deferred tool sets can change between turns; their earlier calls still belong to n8n.
+	result.input = result.input.map((item) =>
+		['function_call', 'custom_tool_call'].includes(item?.type) && !item.namespace
+			? { ...item, namespace: 'n8n' }
+			: item,
+	);
 	result.store = false;
 	result.stream = true;
 	result.include = [...new Set([...(request.include ?? []), 'reasoning.encrypted_content'])];

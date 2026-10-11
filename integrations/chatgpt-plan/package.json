@@ -10,9 +10,9 @@
 	"scripts": {
 		"start": "node src/main.mjs",
 		"test": "vitest run --maxWorkers=1",
-		"format": "prettier --write src test *.mjs *.json *.md *.yml",
-		"format:check": "prettier --check src test *.mjs *.json *.md *.yml",
-		"lint": "eslint src test *.mjs"
+		"format": "prettier --write src test runtime *.mjs *.json *.md *.yml",
+		"format:check": "prettier --check src test runtime *.mjs *.json *.md *.yml",
+		"lint": "eslint src test runtime *.mjs"
 	},
 	"dependencies": {
 		"eventsource-parser": "4.1.1",

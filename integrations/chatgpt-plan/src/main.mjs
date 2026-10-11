@@ -1,8 +1,11 @@
+import { localCodeExchange } from './local-exchange.mjs';
 import { TokenStore } from './auth.mjs';
 import { createServers } from './server.mjs';
 
 const store = new TokenStore(process.env.CHATGPT_AUTH_DIR ?? './data');
 await store.init();
+if (process.env.CHATGPT_OAUTH_CODE_EXCHANGE === 'local-transfer')
+	store.codeExchangeFetch = localCodeExchange(store);
 const { infer, admin } = await createServers({
 	store,
 	apiKey: process.env.CHATGPT_BRIDGE_API_KEY,

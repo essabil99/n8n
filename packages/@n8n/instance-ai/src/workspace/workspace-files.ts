@@ -1,4 +1,5 @@
 import { isAbortError } from '@n8n/agents';
+import pLimit from 'p-limit';
 
 import { formatErrorForLog } from '../error-formatting';
 import type { Logger } from '../logger';
@@ -204,10 +205,14 @@ export async function writeWorkspaceFileMap(
 			},
 		},
 		async () => {
+			// Leave room under the sandbox service's per-sandbox request limit.
+			const limit = pLimit(8);
 			await Promise.all(
-				Array.from(files, async ([filePath, content]) => {
-					await writeWorkspaceFile(workspace, filePath, content, options);
-				}),
+				Array.from(files, ([filePath, content]) =>
+					limit(async () => {
+						await writeWorkspaceFile(workspace, filePath, content, options);
+					}),
+				),
 			);
 		},
 	);

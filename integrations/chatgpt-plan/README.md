@@ -1,66 +1,53 @@
 # ChatGPT plan connection for n8n Assistant
 
-This experimental bridge connects a self-hosted n8n Assistant to a user's ChatGPT plan. It uses OpenAI's documented OAuth flow. It does not use a paid OpenAI API key.
+This experimental integration connects self-hosted n8n Assistant to ChatGPT plan usage through documented OpenAI OAuth. Requests use the subscription's limits; there is no billable API-key fallback. Live authorization is currently blocked by OpenAI returning `invalid_grant`. Do not treat the passing mock tests as proof of live account access.
 
-The bridge runs beside n8n. The supplied stack runs stock n8n 2.42.6. It does not require a full n8n monorepo build. The bridge source and deployment configuration live in this fork.
+## Deployment
 
-## Request path
+The stack uses n8n 2.42.6 with a small, version-checked runtime overlay. The matching source changes are in the agents model factory and instance-ai workspace file helpers. A full monorepo build is unnecessary for this pinned deployment. Review the overlay before changing n8n versions; it deliberately fails on a different version or factory layout.
 
-```mermaid
-flowchart LR
-    Browser -->|Sign in through an SSH tunnel| Bridge
-    Assistant[n8n Assistant] -->|Private bridge key| Bridge
-    Bridge -->|ChatGPT OAuth token| Responses[OpenAI Responses API]
-    Assistant --> Sandbox[n8n sandbox service]
-```
-
-OpenAI documents this flow for eligible open-source or locally hosted applications. OpenAI’s September 29, 2026 release documents this app capability for eligible Plus and Pro users. Free-account access is not documented for this flow. Account, workspace, integration, and model eligibility still apply. See the [official release details](https://learn.chatgpt.com/docs/whats-new/devday-2026). Plan usage limits apply. This does not grant unlimited API access. A completed live inference request is required to verify access.
-
-## Start on a Linux VM
-
-1. Use Node 24 or later and Docker Compose.
-2. Copy `.env.example` to a private directory outside the fork.
-3. Generate a distinct random value for each secret. Keep the environment file private.
-4. Create `CHATGPT_AUTH_DIR`. Set its owner to UID 1000. Set its mode to `0700`.
-5. Set `N8N_BIND_IP` to a private address. The default is loopback.
-6. Start the stack from this directory:
+Use Node 24+, Docker Compose, and a private environment file outside the fork. Copy `.env.example`, generate a distinct random value for every secret, and create `CHATGPT_AUTH_DIR` owned by UID 1000 with mode `0700`. Set `N8N_BIND_IP` to a private interface; the default is loopback.
 
 ```sh
 docker compose --env-file /absolute/private/path/stack.env up -d --build
 docker compose --env-file /absolute/private/path/stack.env ps
 ```
 
-The Compose project has its own SQLite database and Docker volumes. It does not use another project's database or ports. The sandbox runner uses privileged Docker-in-Docker. Its ports are not published. OAuth credentials are mounted only into the bridge.
+This project has its own SQLite volume. Sandbox ports are internal. The privileged Docker-in-Docker runner executes n8n's local workflow tools. HTTP and insecure cookies are development settings; use TLS and secure cookies for an internet deployment. OAuth credentials are mounted only into the bridge.
 
-The supplied configuration uses HTTP for a private development instance. For an internet deployment, add TLS and restore secure cookies. n8n recommends a managed sandbox for production.
+## Connect
 
-## Connect the ChatGPT account
+Create the n8n owner account first. The Assistant endpoint is configured at startup, while ChatGPT authorization is a separate operator action. This prototype has one ChatGPT connection shared by everyone with Assistant access in the instance.
 
-First open n8n and create its owner account. Owner setup and ChatGPT authorization are separate. The stack preconfigures the Assistant endpoint at startup, but it cannot use ChatGPT until OAuth completes.
-
-This prototype has one connection for the entire n8n instance. Users who can access its Assistant share that connection’s plan usage. Only the operator should access the loopback connection page through SSH. It is not per-user OAuth inside n8n settings.
-
-OpenAI requires an HTTP loopback callback. A browser on another computer cannot reach the VM's loopback listener without a tunnel.
-
-1. Open an SSH tunnel from the computer that runs your browser:
+For this Windows-to-VM deployment, run both the tunnel and the OAuth controller on the browser computer. Initial code exchange happens there, and its protected result returns over SSH. Identity validation, token storage, refresh, n8n, and inference stay on the VM. This follows the [VM sign-in guidance](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms); changing exchange location alone did not resolve the observed rejection.
 
 ```sh
-ssh -N -L 1455:127.0.0.1:1455 user@vm-address
+ssh -N -L 1455:127.0.0.1:1455 saad@100.64.63.105
 ```
 
-2. Open `http://127.0.0.1:1455` in that browser.
-3. Select **Continue with ChatGPT**.
-4. Complete OpenAI sign-in and approve ChatGPT plan access.
-5. Select an available model in the returned page.
-6. Return to n8n Assistant. Send a small request. Review any generated workflow.
+The controller requires Python 3.10+, Paramiko, a trusted SSH host key, and `N8N_VM_PASSWORD` in its process environment. Its VM address, username, and private directory are the constants in `tools/local-oauth-controller.py`; adapt them for another deployment. Keep it running during sign-in:
 
-The bridge creates a stable host ID before sign-in. Initial registration uses `dynamic_agent_client`. It saves the issued client ID for later sign-in and token renewal. It validates the ID token signature, issuer, audience, expiry, and nonce. It checks the granted ChatGPT plan scope.
+```sh
+python tools/local-oauth-controller.py
+```
 
-Credentials use atomic writes and owner-only permissions. The single bridge process serializes rotating refresh tokens. Do not run two bridge processes against the same credential directory. Do not copy this credential directory into a repository or image.
+Open `http://127.0.0.1:1455`, choose **Continue with ChatGPT**, complete authorization, and select a model. Use a reasoning model supporting text and local function tools; the default is `gpt-6.1-sol`. The alias forces the SDK's reasoning model behavior. Return to n8n Assistant and send a small request after the page confirms a saved, authorized connection.
 
-## n8n configuration
+OpenAI documents this third-party capability for eligible Plus and Pro users. Free access is not documented, and account, workspace, rollout, model, and region policies still apply. Buying a plan is not established to fix `invalid_grant`. See the [release details](https://learn.chatgpt.com/docs/whats-new/devday-2026).
 
-The stack sets these variables:
+## Authentication and recovery
+
+Registration uses `dynamic_agent_client`, a persistent VM host ID, fresh state/nonce/PKCE, the exact loopback callback, and the documented scopes/resource. Exchange uses the callback's issued client ID. That registration is persisted even after failed exchange, so a restart does not lose fresh-sign-in recovery. The bridge verifies the ID token's signature, issuer, audience, expiry, and nonce before activating a connection.
+
+One-time codes and rotating refresh grants are sent once per attempt. The controller atomically claims each exchange and refuses redirects. It prints status only and writes the result to owner-only VM files, never local token files. Expired transfer files are removed. Refresh is serialized, honors `earliest_refresh_at`, and atomically saves replacements before returning them. Run one bridge process per credential directory.
+
+A valid identity without plan permission remains signed in with inference disabled. Terminal refresh errors clear unusable access/refresh tokens while retaining the validated profile and client registration for reconnection. Temporary errors retain credentials. These behaviors follow the [recovery guidance](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery).
+
+Safe status diagnostics are at `/auth/status`; detailed redacted diagnostics are in the private `last-oauth-error.json`. No authorization code, verifier, bearer token, or submitted client ID is logged there. Repeated `invalid_grant` without a description remains unresolved; preserve its request ID for provider investigation instead of replaying codes or changing client identity. Disconnect the app through ChatGPT settings to revoke access.
+
+## Assistant compatibility
+
+The environment routes the real Assistant through this model configuration:
 
 ```ini
 N8N_INSTANCE_AI_MODEL=openai/chatgpt-plan
@@ -68,55 +55,40 @@ N8N_INSTANCE_AI_MODEL_URL=http://chatgpt-bridge:3210/v1
 N8N_INSTANCE_AI_MODEL_API_KEY=<private bridge key>
 ```
 
-Use the environment configuration. n8n can treat a custom URL selected through its settings UI as a Chat Completions endpoint. This bridge implements Responses, not Chat Completions. Workflow OpenAI nodes that need other endpoints are outside this integration's scope.
+The key authenticates n8n to the private bridge. Only the OAuth bearer reaches `https://api.openai.com/v1/responses`. The explicit alias pins Responses throughout the central model factory, covering the Assistant, child agents, title generation, and observational memory. The self-managed resolver uses this environment endpoint and does not apply n8n's hosted-credit balance. The connection does not replace credentials used by OpenAI nodes inside generated workflows.
 
-The bridge sends inference only to `https://api.openai.com/v1/responses`. It does not use ChatGPT web backend endpoints or copy another application's OAuth client ID.
+The SDK must receive `store: false` **before** converting history. Otherwise it emits stored item references, losing encrypted reasoning on follow-up calls even if the bridge later changes the body. The factory middleware preserves full history, enables reasoning for the alias, and requests encrypted reasoning content. Real SDK tests reproduced that failure before the patch and passed afterward.
 
-## Compatibility behavior
+The bridge streams upstream, collects completed SSE for non-streaming setup probes, converts system messages to developer messages, removes unsupported fields, and keeps local tools in the `n8n` namespace, including older tool calls no longer in the active set. n8n's deferred `search_tools` and `load_tool` are local function tools; they do not require OpenAI's hosted tool-search capability. Workflow compilation, sandbox operations, permissions, and approval handling execute in n8n. The overlay also bounds sandbox reference-file uploads and cache reads: stock n8n issued them concurrently and exceeded the sandbox service's 16-request limit during cold setup.
 
-- Send `store: false` and `stream: true` upstream.
-- Convert system message items to developer message items.
-- Retain full history. Reject stored conversation IDs.
-- Retain encrypted reasoning content for later turns.
-- Remove fields that the ChatGPT plan route does not support.
-- Group local function tools in an `n8n` namespace.
-- Preserve tool-call output and namespace across turns.
-- Collect a completed SSE response for n8n's non-streaming setup probe.
-- Return account errors and plan limits. Never fall back to billable API authentication.
-- Choose models from the signed-in account's catalog.
+Images and inline files retain their content. The bridge accepts bodies up to 32 MiB, covering n8n's 16 MiB combined attachment allowance plus message overhead. Longer histories still need to fit this bound. Models must support the supplied modality. Files uploads, embeddings, audio, hosted code execution, and other API endpoints are outside this integration.
 
-If code exchange returns `invalid_grant`, the bridge retains the issued client ID in memory for a fresh authorization with new state and PKCE values. It never reuses the failed code. Repeated failures need investigation; a browser sign-in alone does not prove a saved connection or eligible inference. Safe status diagnostics are available at `/auth/status`. Redacted code-exchange diagnostics are written only inside the private credential directory.
+Provider failures preserve HTTP status, JSON body shape, error code/parameter, request ID, and retry delay. Streamed failures remain streamed. Subscription limits stop inference with no paid fallback. Model selection uses the signed-in catalog. See [plan inference requirements](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
 
-The admin page supports one ChatGPT account per deployment. Reconnection retains that account's issued registration. To revoke access, disconnect the app in ChatGPT Settings. Stop the bridge before removing its local credential file.
+## Verification
 
-## Verify changes
-
-Run these checks on the VM:
+Run on the VM:
 
 ```sh
 corepack pnpm install --ignore-workspace --frozen-lockfile
-corepack pnpm exec prettier --check src test eslint.config.mjs package.json README.md compose.yml
-corepack pnpm exec eslint src test eslint.config.mjs
-corepack pnpm exec vitest run test/bridge.test.mjs --maxWorkers=1
+corepack pnpm test
+corepack pnpm lint
+corepack pnpm format:check
+python3 test/local-controller-wire.py
+sh test/run-assistant-smoke.sh
 ```
 
-The tests use isolated temporary directories and mocked inference. They cover request adaptation, completed streams, OAuth state, JWT validation, credential permissions, refresh rotation, origin checks, and usage limits. They do not prove that a real account is eligible.
+The 27 focused tests cover request adaptation, real JWT validation, state/PKCE, credential permissions, rotating refresh, recovery, exchange-file transfer, origins, provider errors, and attachment sizes. The Python wire test verifies exact form encoding and PKCE against a single-use test endpoint, error preservation, and redirect refusal.
 
-With the Compose stack running, also exercise the actual n8n image’s model factory and installed AI SDK:
+The Assistant smoke test uses the actual pinned n8n image, model factory, SDK, Assistant REST/SSE, workflow adapter, sandbox, and a disposable SQLite database. It seeds a fake owner/workflow, follows local tools, replays encrypted reasoning, and checks a later conversation turn, then compiles a TypeScript workflow in the real sandbox and confirms its SQLite save. It also checks the native file helpers against the service request budget. It never calls OpenAI and never creates an owner in the deployed instance. The mock supplies deterministic model responses; it verifies integration contracts, not reasoning quality or plan admission.
 
-```sh
-sh test/run-n8n-sdk-smoke.sh
-```
+Full monorepo checks and live paid-plan inference have not been run. A successful real OAuth exchange and Responses request remain necessary before relying on the integration.
 
-This starts a temporary mock bridge on the Compose network. It checks the non-streaming setup probe and a streamed function call, execution, and continuation through n8n’s own SDK. The mock validates `store: false`, `stream: true`, unsupported-field removal, OAuth bearer isolation, namespaced tools, and full tool history. It makes no OpenAI requests and stops its temporary container afterward.
-
-Local verification: 18 unit tests, lint, formatting, the real n8n SDK smoke test, and container health checks passed. Live verification is incomplete: a Free-account sign-in returned `invalid_grant` during code exchange and no OAuth credentials were saved. Confirm eligibility and complete a real Responses request before relying on this integration.
-
-## Primary references
+## References
 
 - [n8n Assistant setup](https://docs.n8n.io/deploy/host-n8n/configure-n8n/set-up-n8n-assistant/)
-- [OpenAI open-source OAuth registration](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
-- [ChatGPT plan models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
-- [Preview requirements](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
-- [Token renewal](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
-- [Self-hosted VM guidance](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms)
+- [OpenAI registration and sign-in](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+- [Plan models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+- [Preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+- [Accounts and sessions](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
+- [Self-hosted VMs](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms)
