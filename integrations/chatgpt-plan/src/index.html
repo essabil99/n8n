@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width,initial-scale=1" />
+	<title>Connect ChatGPT to n8n</title>
+	<style>
+		body {
+			font: 16px system-ui;
+			background: #f5f5f5;
+			color: #222;
+			margin: 0;
+			display: grid;
+			min-height: 100vh;
+			place-items: center;
+		}
+		main {
+			background: white;
+			border: 1px solid #ddd;
+			border-radius: 14px;
+			max-width: 540px;
+			padding: 36px;
+			margin: 20px;
+		}
+		h1 {
+			font-size: 28px;
+			margin-top: 0;
+		}
+		p {
+			line-height: 1.6;
+		}
+		button {
+			font: inherit;
+			background: #222;
+			color: white;
+			padding: 14px 20px;
+			border: 0;
+			border-radius: 8px;
+			cursor: pointer;
+		}
+		button:disabled {
+			opacity: 0.6;
+		}
+		small {
+			color: #555;
+		}
+		#status {
+			white-space: pre-wrap;
+		}
+		li {
+			margin: 8px 0;
+		}
+	</style>
+	<main>
+		<h1>Connect ChatGPT to n8n</h1>
+		<p>
+			Use your ChatGPT plan for n8n Assistant requests. Your plan limits apply. This connection also
+			uses your plan allowance when n8n runs a request.
+		</p>
+		<p id="status">Checking the connection…</p>
+		<p>
+			This connection applies to the entire n8n instance. Users with Assistant access share its
+			ChatGPT plan usage. Create your n8n owner account first.
+		</p>
+		<p>
+			OpenAI currently documents this app capability for eligible Plus and Pro users. Successful
+			browser sign-in must be followed by a saved connection and verified model access.
+		</p>
+		<p>
+			<a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer"
+				>Manage ChatGPT usage</a
+			>
+		</p>
+		<button id="login">Continue with ChatGPT</button>
+		<p>
+			<small
+				>Your browser signs in with OpenAI. The VM stores the connection and renews it. This bridge
+				does not use a paid API key.</small
+			>
+		</p>
+		<p id="model-controls" hidden>
+			<select id="model"></select>
+			<button id="select-model">Use this model</button>
+		</p>
+		<ul id="models"></ul>
+		<script src="/app.js"></script>
+	</main>
+</html>

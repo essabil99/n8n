@@ -1,0 +1,134 @@
+name: n8n-chatgpt-oauth
+services:
+  chatgpt-bridge:
+    build: .
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      CHATGPT_BRIDGE_API_KEY: ${CHATGPT_BRIDGE_API_KEY:?Set the bridge API key}
+      CHATGPT_PLAN_MODEL: ${CHATGPT_PLAN_MODEL:-gpt-6.1-sol}
+      CHATGPT_AUTH_DIR: /data
+    volumes:
+      - ${CHATGPT_AUTH_DIR:?Set the private credential directory}:/data
+    ports:
+      - '127.0.0.1:1455:1455'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3210/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  sandbox-certs:
+    image: ghcr.io/n8n-io/n8n-sandbox-service-api:${N8N_SANDBOX_VERSION:-1.7.0}
+    user: '0:0'
+    entrypoint: ['sh', '-c']
+    command:
+      - >-
+        bootstrap-mtls.sh --out-dir /tls --api-san sandbox-api
+        --control-san-prefix sandbox-runner &&
+        chown -R sandbox-api:sandbox-api /tls/api &&
+        chmod 0711 /tls
+    environment:
+      NUM_RUNNERS: '1'
+    volumes:
+      - sandbox-tls:/tls
+  sandbox-api:
+    image: ghcr.io/n8n-io/n8n-sandbox-service-api:${N8N_SANDBOX_VERSION:-1.7.0}
+    restart: unless-stopped
+    mem_limit: 512m
+    depends_on:
+      sandbox-certs:
+        condition: service_completed_successfully
+    environment:
+      SANDBOX_API_KEYS: ${SANDBOX_API_KEY:?Set the sandbox API key}
+      SANDBOX_API_RUNNER_REGISTRATION_TOKEN: ${SANDBOX_REGISTRATION_TOKEN:?Set the registration token}
+      SANDBOX_API_RUNNER_API_KEY: ${SANDBOX_RUNNER_KEY:?Set the runner key}
+      SANDBOX_API_GRPC_TLS_CERT_FILE: /tls/api/grpc-server.crt
+      SANDBOX_API_GRPC_TLS_KEY_FILE: /tls/api/grpc-server.key
+      SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE: /tls/api/ca.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE: /tls/api/ca.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /tls/api/control-grpc-api-client.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/api/control-grpc-api-client.key
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME: sandbox-runner-1
+    volumes:
+      - sandbox-tls:/tls:ro
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:8080/healthz']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+  sandbox-runner-1:
+    image: ghcr.io/n8n-io/n8n-sandbox-service-runner-dind:${N8N_SANDBOX_VERSION:-1.7.0}
+    privileged: true
+    restart: unless-stopped
+    mem_limit: 2g
+    depends_on:
+      sandbox-api:
+        condition: service_healthy
+    environment:
+      SANDBOX_RUNNER_REGISTRATION_TOKEN: ${SANDBOX_REGISTRATION_TOKEN:?Set the registration token}
+      SANDBOX_RUNNER_API_KEYS: ${SANDBOX_RUNNER_KEY:?Set the runner key}
+      SANDBOX_RUNNER_API_GRPC_ADDR: sandbox-api:9090
+      SANDBOX_RUNNER_HTTP_BASE_URL: https://sandbox-runner-1:8080
+      SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: ':9091'
+      SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: sandbox-runner-1:9091
+      SANDBOX_RUNNER_ID: runner-1
+      SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: ghcr.io/n8n-io/n8n-sandbox-service-sandbox:${N8N_SANDBOX_VERSION:-1.7.0}
+      SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE: /tls/runner/ca.crt
+      SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE: /tls/runner/grpc-client.crt
+      SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE: /tls/runner/grpc-client.key
+      SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME: sandbox-api
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /tls/runner/control-grpc-server.crt
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/runner/control-grpc-server.key
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE: /tls/runner/ca.crt
+    volumes:
+      - sandbox-tls:/tls:ro
+      - sandbox-docker:/var/lib/docker
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION:-2.42.6}
+    restart: unless-stopped
+    mem_limit: 1536m
+    depends_on:
+      chatgpt-bridge:
+        condition: service_healthy
+      sandbox-api:
+        condition: service_healthy
+    ports:
+      - '${N8N_BIND_IP:-127.0.0.1}:${N8N_PORT:-5678}:5678'
+    environment:
+      NODE_OPTIONS: --max-old-space-size=1024
+      N8N_HOST: ${N8N_BIND_IP:-127.0.0.1}
+      N8N_PORT: '5678'
+      N8N_PROTOCOL: http
+      N8N_EDITOR_BASE_URL: http://${N8N_BIND_IP:-127.0.0.1}:${N8N_PORT:-5678}
+      N8N_SECURE_COOKIE: 'false'
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Set the persistent encryption key}
+      N8N_DIAGNOSTICS_ENABLED: 'false'
+      N8N_INSTANCE_AI_MODEL: openai/chatgpt-plan
+      N8N_INSTANCE_AI_MODEL_URL: http://chatgpt-bridge:3210/v1
+      N8N_INSTANCE_AI_MODEL_API_KEY: ${CHATGPT_BRIDGE_API_KEY:?Set the bridge API key}
+      N8N_INSTANCE_AI_SANDBOX_ENABLED: 'true'
+      N8N_INSTANCE_AI_SANDBOX_PROVIDER: n8n-sandbox
+      N8N_SANDBOX_SERVICE_URL: http://sandbox-api:8080
+      N8N_SANDBOX_SERVICE_API_KEY: ${SANDBOX_API_KEY:?Set the sandbox API key}
+      N8N_RUNNERS_ENABLED: 'true'
+      GENERIC_TIMEZONE: ${GENERIC_TIMEZONE:-Africa/Casablanca}
+      TZ: ${GENERIC_TIMEZONE:-Africa/Casablanca}
+    volumes:
+      - n8n-data:/home/node/.n8n
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:5678/healthz']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+volumes:
+  n8n-data:
+  sandbox-tls:
+  sandbox-docker:

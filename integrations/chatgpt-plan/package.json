@@ -1,0 +1,28 @@
+{
+	"name": "n8n-chatgpt-plan-bridge",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"packageManager": "pnpm@12.4.2",
+	"engines": {
+		"node": ">=24.0.0"
+	},
+	"scripts": {
+		"start": "node src/main.mjs",
+		"test": "vitest run --maxWorkers=1",
+		"format": "prettier --write src test *.mjs *.json *.md *.yml",
+		"format:check": "prettier --check src test *.mjs *.json *.md *.yml",
+		"lint": "eslint src test *.mjs"
+	},
+	"dependencies": {
+		"eventsource-parser": "4.1.1",
+		"fastify": "5.12.5",
+		"jose": "6.2.12"
+	},
+	"devDependencies": {
+		"@eslint/js": "10.0.1",
+		"eslint": "10.12.0",
+		"prettier": "3.9.10",
+		"vitest": "5.0.3"
+	}
+}
