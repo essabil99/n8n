@@ -99,6 +99,59 @@ async function run(threadId, message) {
 
 	return messages;
 }
+async function checkNativeSettings() {
+	const routes = [
+		['GET', 'status'],
+		['POST', 'start'],
+		['GET', 'models'],
+		['POST', 'model'],
+	];
+	for (const [method, action] of routes) {
+		const response = await fetch(base + '/rest/instance-ai/settings/chatgpt/' + action, {
+			method,
+			headers: { 'Content-Type': 'application/json', Origin: base },
+			...(method === 'POST' ? { body: '{}' } : {}),
+		});
+		assert.equal(response.status, 401, 'Anonymous native settings access was allowed.');
+	}
+	const settings = await request('/rest/instance-ai/settings');
+	assert.equal(settings.chatgptPlan.plan_authorized, true);
+	assert.equal(settings.chatgptPlan.model, 'gpt-6.1-sol');
+	assert.ok(!JSON.stringify(settings).includes(key));
+	const models = await request('/rest/instance-ai/settings/chatgpt/models');
+	assert.equal(models.models.length, 2);
+	await request('/rest/instance-ai/settings/chatgpt/model', { model: 'fixture-second' });
+	assert.equal(
+		(await request('/rest/instance-ai/settings/chatgpt/status')).model,
+		'fixture-second',
+	);
+	await request('/rest/instance-ai/settings/chatgpt/model', { model: 'gpt-6.1-sol' });
+	const ownerCookie = cookie;
+	const invitations = await request('/rest/invitations', [
+		{ email: 'native-member@example.invalid', role: 'global:member' },
+	]);
+	const invitation = invitations[0].user;
+	assert.equal(invitation.emailSent, false, 'This disposable test must not send email.');
+	const token = new URL(invitation.inviteAcceptUrl).searchParams.get('token');
+	await request('/rest/invitations/accept', {
+		token,
+		firstName: 'Native',
+		lastName: 'Member',
+		password: 'Smoke9!' + randomBytes(16).toString('hex'),
+	});
+	for (const [method, action] of routes) {
+		const response = await fetch(base + '/rest/instance-ai/settings/chatgpt/' + action, {
+			method,
+			headers: { 'Content-Type': 'application/json', Origin: base, Cookie: cookie },
+			...(method === 'POST' ? { body: '{}' } : {}),
+		});
+		assert.equal(response.status, 403, 'A member changed the shared ChatGPT connection.');
+	}
+	cookie = ownerCookie;
+	console.log(
+		'Native owner settings, safe status, catalog, model selection, anonymous/member permissions: passed',
+	);
+}
 async function main() {
 	await request('/rest/owner/setup', {
 		email: 'oauth-smoke@example.invalid',
@@ -107,10 +160,8 @@ async function main() {
 		password: 'Smoke9!' + randomBytes(16).toString('hex'),
 	});
 	console.log('Disposable n8n owner setup: passed');
-	const projects = await request('/rest/projects');
-	const projectId = (Array.isArray(projects) ? projects : projects.projects).find(
-		(item) => item.type === 'personal',
-	).id;
+	await checkNativeSettings();
+	const projectId = (await request('/rest/projects/personal')).id;
 	await request('/rest/workflows', {
 		name: 'OAuth smoke workflow',
 		nodes: [

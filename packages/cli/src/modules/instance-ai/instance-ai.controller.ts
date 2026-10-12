@@ -734,6 +734,30 @@ export class InstanceAiController {
 		return await this.settingsService.getAdminSettings();
 	}
 
+ @Get('/settings/chatgpt/status')
+ @GlobalScope('instanceAi:manage')
+ async getChatgptPlanStatus(_req: AuthenticatedRequest) {
+  return await this.settingsService.getChatgptPlanStatus();
+ }
+
+ @Post('/settings/chatgpt/start')
+ @GlobalScope('instanceAi:manage')
+ async startChatgptPlanSignIn(_req: AuthenticatedRequest) {
+  return await this.settingsService.startChatgptPlanSignIn();
+ }
+
+ @Get('/settings/chatgpt/models')
+ @GlobalScope('instanceAi:manage')
+ async getChatgptPlanModels(_req: AuthenticatedRequest) {
+  return await this.settingsService.getChatgptPlanModels();
+ }
+
+ @Post('/settings/chatgpt/model')
+ @GlobalScope('instanceAi:manage')
+ async selectChatgptPlanModel(req: AuthenticatedRequest) {
+  return await this.settingsService.selectChatgptPlanModel(req.body);
+ }
+
 	@Get('/settings/models')
 	@GlobalScope('instanceAi:manage')
 	async getModelCatalog(_req: AuthenticatedRequest) {

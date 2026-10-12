@@ -2,6 +2,8 @@ import { makeRestApiRequest } from '@n8n/rest-api-client';
 import type { IRestApiContext } from '@n8n/rest-api-client';
 import type {
 	InstanceAiAdminSettingsResponse,
+ InstanceAiChatgptPlanStatus,
+ InstanceAiChatgptPlanModel,
 	InstanceAiAdminSettingsUpdateRequest,
 	InstanceAiModelCatalogResponse,
 	InstanceAiUserPreferencesResponse,
@@ -76,4 +78,17 @@ export async function verifySearch(
 	body: InstanceAiVerifySearchRequest,
 ): Promise<InstanceAiVerificationResponse> {
 	return await makeRestApiRequest(context, 'POST', '/instance-ai/settings/verify/search', body);
+}
+
+export async function fetchChatgptPlanStatus(context: IRestApiContext): Promise<InstanceAiChatgptPlanStatus> {
+ return await makeRestApiRequest(context, 'GET', '/instance-ai/settings/chatgpt/status');
+}
+export async function startChatgptPlanSignIn(context: IRestApiContext): Promise<{ url: string }> {
+ return await makeRestApiRequest(context, 'POST', '/instance-ai/settings/chatgpt/start', {});
+}
+export async function fetchChatgptPlanModels(context: IRestApiContext): Promise<{ models: InstanceAiChatgptPlanModel[] }> {
+ return await makeRestApiRequest(context, 'GET', '/instance-ai/settings/chatgpt/models');
+}
+export async function selectChatgptPlanModel(context: IRestApiContext, model: string): Promise<{ model: string }> {
+ return await makeRestApiRequest(context, 'POST', '/instance-ai/settings/chatgpt/model', { model });
 }

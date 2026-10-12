@@ -2481,7 +2481,21 @@ export interface InstanceAiEnvManagedFields {
 	};
 }
 
+export interface InstanceAiChatgptPlanStatus {
+ sign_in_pending?: boolean;
+ authenticated: boolean;
+ plan_authorized: boolean;
+ reauthorization_required: boolean;
+ model: string;
+}
+
+export interface InstanceAiChatgptPlanModel {
+ slug: string;
+ display_name?: string;
+}
+
 export interface InstanceAiAdminSettingsResponse {
+ chatgptPlan?: InstanceAiChatgptPlanStatus;
 	enabled: boolean;
 	permissions: InstanceAiPermissions;
 	mcpAccessEnabled: boolean;
@@ -2507,6 +2521,7 @@ export type InstanceAiWebSearchSource = InstanceAiComponentSource | 'disabled';
 
 export type InstanceAiSetupStateInput = Pick<
 	InstanceAiAdminSettingsResponse,
+	| 'chatgptPlan'
 	| 'modelEnvConfigured'
 	| 'modelCredentialId'
 	| 'modelName'
@@ -2541,7 +2556,9 @@ export interface InstanceAiSetupState {
 export function deriveInstanceAiSetupState(
 	settings: InstanceAiSetupStateInput,
 ): InstanceAiSetupState {
-	const modelSource: InstanceAiComponentSource = settings.modelEnvConfigured
+	const subscriptionReady = !settings.chatgptPlan ||
+  (settings.chatgptPlan.authenticated && settings.chatgptPlan.plan_authorized && Boolean(settings.chatgptPlan.model));
+ const modelSource: InstanceAiComponentSource = !subscriptionReady ? 'none' : settings.modelEnvConfigured
 		? 'env'
 		: settings.modelCredentialId && settings.modelName
 			? 'ui'

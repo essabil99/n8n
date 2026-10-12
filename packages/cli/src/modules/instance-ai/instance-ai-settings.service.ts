@@ -60,6 +60,14 @@ import {
 	normalizeSandboxProvider,
 } from './sandbox-provider';
 
+import {
+ isChatgptPlanConfigured,
+ getChatgptPlanStatus,
+ startChatgptPlanSignIn,
+ getChatgptPlanModels,
+ selectChatgptPlanModel,
+} from './chatgpt-plan-connection';
+
 const ADMIN_SETTINGS_KEY = 'instanceAi.settings';
 
 const MODEL_PROVIDER_API_KEY_ENV: ReadonlyMap<string, string> = new Map([
@@ -401,9 +409,9 @@ export class InstanceAiSettingsService {
 		});
 	}
 
-	private buildAdminSettingsResponse(
+	private async buildAdminSettingsResponse(
 		credentialSelection: AdminCredentialSelection,
-	): InstanceAiAdminSettingsResponse {
+	): Promise<InstanceAiAdminSettingsResponse> {
 		const c = this.config;
 		const modelProvider = c.model.split('/', 1)[0] ?? '';
 		const modelProviderApiKeyEnv = MODEL_PROVIDER_API_KEY_ENV.get(modelProvider);
@@ -429,6 +437,11 @@ export class InstanceAiSettingsService {
 				: c.sandboxProvider,
 		);
 		return {
+   chatgptPlan: directEnvironmentConfig && isChatgptPlanConfigured(c)
+    ? await this.getChatgptPlanStatus().catch(() => ({
+      authenticated: false, plan_authorized: false, reauthorization_required: false, model: '',
+     }))
+    : undefined,
 			enabled: this.enabled,
 			permissions: { ...this.permissions },
 			mcpAccessEnabled: this.mcpAccessEnabled,
@@ -1345,7 +1358,7 @@ export class InstanceAiSettingsService {
 				),
 				this.instanceCredentialBroker.getAssignedCredentialId(INSTANCE_AI_SEARCH_CREDENTIAL_POLICY),
 			]);
-		const response = this.buildAdminSettingsResponse({
+		const response = await this.buildAdminSettingsResponse({
 			...modelSelection,
 			daytonaCredentialId,
 			n8nSandboxCredentialId,
@@ -1353,6 +1366,11 @@ export class InstanceAiSettingsService {
 		});
 		return deriveInstanceAiSetupState(response);
 	}
+
+ getChatgptPlanStatus() { return getChatgptPlanStatus(this.config); }
+ startChatgptPlanSignIn() { return startChatgptPlanSignIn(this.config); }
+ getChatgptPlanModels() { return getChatgptPlanModels(this.config); }
+ selectChatgptPlanModel(input: unknown) { return selectChatgptPlanModel(this.config, input); }
 
 	getConfiguredModelId(): string {
 		return this.config.model.trim();

@@ -95,6 +95,11 @@ const isSearchEnvManaged = computed(
 );
 
 const modelValue = computed(() => {
+	const plan = store.settings?.chatgptPlan;
+	if (plan)
+		return plan.authenticated && plan.plan_authorized
+			? 'ChatGPT · ' + plan.model
+			: i18n.baseText('instanceAi.chatgpt.disconnected');
 	if (isModelConnectionEnvManaged.value)
 		return i18n.baseText('instanceAi.onboarding.foundOnServer');
 	if (store.settings?.modelCredentialId) {

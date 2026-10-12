@@ -42,6 +42,11 @@ const onboarding = useInstanceAiOnboarding({
 
 const notSet = computed(() => i18n.baseText('instanceAi.onboarding.notSet'));
 const modelValue = computed(() => {
+	const plan = store.settings?.chatgptPlan;
+	if (plan)
+		return plan.authenticated && plan.plan_authorized
+			? 'ChatGPT · ' + plan.model
+			: i18n.baseText('instanceAi.chatgpt.disconnected');
 	if (!configuration.modelConfigured.value) return notSet.value;
 	if (store.settings?.modelEnvConfigured) {
 		return i18n.baseText('instanceAi.onboarding.foundOnServer');

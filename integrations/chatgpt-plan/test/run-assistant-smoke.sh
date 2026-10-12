@@ -20,10 +20,10 @@ cleanup() {
 trap cleanup EXIT
 docker run -d --rm --name n8n-chatgpt-sdk-smoke --network n8n-chatgpt-oauth_default --memory 256m \
   -e CHATGPT_BRIDGE_API_KEY=mock-bridge-key-with-more-than-24-characters \
-  -v "$PWD/test:/app/test:ro" n8n-chatgpt-oauth-chatgpt-bridge node test/assistant-mock-server.mjs >/dev/null
+  -v "$PWD/test:/app/test:ro" -v "$PWD/src:/app/src:ro" n8n-chatgpt-oauth-chatgpt-bridge node test/assistant-mock-server.mjs >/dev/null
 docker run -d --rm --name n8n-assistant-smoke --network n8n-chatgpt-oauth_default --memory 1536m \
   --env-file "$private/assistant-smoke.env" --tmpfs /home/node/.n8n:uid=1000,gid=1000,mode=0700,size=128m \
-  n8n-chatgpt-plan:2.42.6 >/dev/null
+  "${N8N_CHATGPT_SMOKE_IMAGE:-n8n-chatgpt-plan:2.42.6}" >/dev/null
 ready=false
 for attempt in $(seq 1 45); do
   if docker exec n8n-assistant-smoke wget -qO- http://127.0.0.1:5678/healthz/readiness >/dev/null 2>&1; then ready=true; break; fi

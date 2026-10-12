@@ -41,6 +41,8 @@ import { useInstanceAiSettingsStore } from '../instanceAiSettings.store';
 import { sanitizeFailureDetail } from './sanitizeFailureDetail';
 import type { InstanceAiOnboardingStep } from './useInstanceAiOnboarding';
 
+import ChatgptPlanConnection from '../components/settings/ChatgptPlanConnection.vue';
+
 const DAYTONA_API_URL = 'https://app.daytona.io/api';
 const N8N_SANDBOX_HEADER = 'x-api-key';
 const STATIC_SECRET_MASK = '••••••••••••';
@@ -94,6 +96,9 @@ const store = useInstanceAiSettingsStore();
 const credentialsStore = useCredentialsStore();
 const { credentialTestError, testSavedCredential } = useInstanceCredentialTest();
 
+const chatgptPlanConnection = ref<InstanceType<typeof ChatgptPlanConnection>>();
+const chatgptPlanReady = ref(false);
+const isChatgptPlan = computed(() => store.settings?.chatgptPlan !== undefined);
 const busy = ref(false);
 const failure = ref<InstanceAiVerificationFailure | null>(null);
 const failureDetail = ref<string | null>(null);
@@ -216,6 +221,7 @@ const changed = computed(() => formSnapshot() !== baseline.value);
 const stepReady = computed(() => {
 	if (props.step === 'done') return true;
 	if (props.step === 'model') {
+		if (isChatgptPlan.value) return chatgptPlanReady.value;
 		if (modelConnectionLocked.value)
 			return modelNameLocked.value || modelName.value.trim().length > 0;
 		if (selectedExistingCredentialId.value) return modelName.value.trim().length > 0;
@@ -248,9 +254,10 @@ const primaryDisabled = computed(
 		busy.value ||
 		!stepReady.value ||
 		(props.editMode &&
+			!isChatgptPlan.value &&
 			environmentManaged.value &&
 			(props.step !== 'model' || modelNameLocked.value)) ||
-		(props.editMode && !props.allowUnchanged && !changed.value),
+		(props.editMode && !isChatgptPlan.value && !props.allowUnchanged && !changed.value),
 );
 const canGoBack = computed(() => {
 	if (props.editMode) return false;
@@ -430,7 +437,7 @@ watch(
 	async ([open]) => {
 		if (!open) return;
 		await hydrate();
-		if (props.step === 'model' && modelProvider.value !== 'custom') {
+		if (props.step === 'model' && !isChatgptPlan.value && modelProvider.value !== 'custom') {
 			void store.loadModelCatalog();
 		}
 	},
@@ -649,6 +656,10 @@ async function handlePrimary(): Promise<void> {
 	failureDetail.value = null;
 	success.value = null;
 	try {
+		if (props.step === 'model' && isChatgptPlan.value) {
+			if (await chatgptPlanConnection.value?.save()) emit('advance');
+			return;
+		}
 		const result = await runVerification();
 		if (!result?.ok) {
 			failure.value = result?.failure ?? 'provider_error';
@@ -749,183 +760,202 @@ const existingCredentialLabel = (credential: InstanceAiProviderConnection) =>
 						{{ i18n.baseText('instanceAi.onboarding.model.title') }}
 					</N8nHeading>
 					<N8nText tag="p" :class="$style.description">
-						{{ i18n.baseText('instanceAi.onboarding.model.lede') }}
+						{{
+							i18n.baseText(
+								isChatgptPlan ? 'instanceAi.chatgpt.lede' : 'instanceAi.onboarding.model.lede',
+							)
+						}}
 					</N8nText>
 				</div>
 
-				<N8nCallout v-if="modelConnectionLocked" theme="warning">
-					<span>{{ i18n.baseText('instanceAi.onboarding.env.title') }}</span>
-					{{ i18n.baseText('instanceAi.onboarding.env.description') }}
-					<N8nLink :to="ENV_DOCS_URL" size="small" new-window>
-						{{ i18n.baseText('instanceAi.onboarding.env.docs') }}
-					</N8nLink>
-				</N8nCallout>
+				<ChatgptPlanConnection
+					v-if="open && isChatgptPlan"
+					ref="chatgptPlanConnection"
+					@ready="chatgptPlanReady = $event"
+				/>
+				<template v-if="!isChatgptPlan">
+					<N8nCallout v-if="modelConnectionLocked" theme="warning">
+						<span>{{ i18n.baseText('instanceAi.onboarding.env.title') }}</span>
+						{{ i18n.baseText('instanceAi.onboarding.env.description') }}
+						<N8nLink :to="ENV_DOCS_URL" size="small" new-window>
+							{{ i18n.baseText('instanceAi.onboarding.env.docs') }}
+						</N8nLink>
+					</N8nCallout>
 
-				<N8nInputLabel
-					v-if="showExistingCredentialSelect"
-					:class="$style.compactLabel"
-					:label="i18n.baseText('instanceAi.onboarding.existingConnection.label')"
-					input-name="assistant-existing-model-credential"
-				>
-					<N8nSelect
-						id="assistant-existing-model-credential"
-						:model-value="selectedExistingCredentialId"
-						:teleported="true"
-						:data-test-id="existingCredentialTestId"
-						@update:model-value="selectExistingCredential"
-					>
-						<N8nOption v-if="!readOnly" value="" :label="editableConnectionLabel" />
-						<N8nOption
-							v-for="credential in compatibleCredentials"
-							:key="credential.id"
-							:value="credential.id"
-							:label="existingCredentialLabel(credential)"
-						/>
-					</N8nSelect>
-				</N8nInputLabel>
-
-				<div :class="$style.fields">
 					<N8nInputLabel
+						v-if="showExistingCredentialSelect"
 						:class="$style.compactLabel"
-						:label="i18n.baseText('instanceAi.onboarding.model.provider')"
-						input-name="assistant-model-provider"
+						:label="i18n.baseText('instanceAi.onboarding.existingConnection.label')"
+						input-name="assistant-existing-model-credential"
 					>
-						<N8nInput
-							v-if="modelConnectionLocked || readOnly || selectedExistingCredentialId"
-							id="assistant-model-provider"
-							:model-value="
-								selectedExistingCredential
-									? credentialProviderLabel(selectedExistingCredential)
-									: STATIC_SECRET_MASK
-							"
-							disabled
-							:data-test-id="surface === 'settings' ? 'n8n-agent-model-provider-input' : undefined"
-						/>
 						<N8nSelect
-							v-else
-							id="assistant-model-provider"
-							:model-value="modelProvider"
+							id="assistant-existing-model-credential"
+							:model-value="selectedExistingCredentialId"
 							:teleported="true"
-							:data-test-id="
-								surface === 'settings'
-									? 'n8n-agent-model-provider-select'
-									: 'assistant-model-provider'
-							"
-							@update:model-value="selectModelProvider"
+							:data-test-id="existingCredentialTestId"
+							@update:model-value="selectExistingCredential"
 						>
+							<N8nOption v-if="!readOnly" value="" :label="editableConnectionLabel" />
 							<N8nOption
-								v-for="provider in INSTANCE_AI_MODEL_PROVIDERS"
-								:key="provider.id"
-								:value="provider.id"
-								:label="modelProviderLabel(provider)"
+								v-for="credential in compatibleCredentials"
+								:key="credential.id"
+								:value="credential.id"
+								:label="existingCredentialLabel(credential)"
 							/>
 						</N8nSelect>
 					</N8nInputLabel>
 
-					<N8nInputLabel
+					<div :class="$style.fields">
+						<N8nInputLabel
+							:class="$style.compactLabel"
+							:label="i18n.baseText('instanceAi.onboarding.model.provider')"
+							input-name="assistant-model-provider"
+						>
+							<N8nInput
+								v-if="modelConnectionLocked || readOnly || selectedExistingCredentialId"
+								id="assistant-model-provider"
+								:model-value="
+									selectedExistingCredential
+										? credentialProviderLabel(selectedExistingCredential)
+										: STATIC_SECRET_MASK
+								"
+								disabled
+								:data-test-id="
+									surface === 'settings' ? 'n8n-agent-model-provider-input' : undefined
+								"
+							/>
+							<N8nSelect
+								v-else
+								id="assistant-model-provider"
+								:model-value="modelProvider"
+								:teleported="true"
+								:data-test-id="
+									surface === 'settings'
+										? 'n8n-agent-model-provider-select'
+										: 'assistant-model-provider'
+								"
+								@update:model-value="selectModelProvider"
+							>
+								<N8nOption
+									v-for="provider in INSTANCE_AI_MODEL_PROVIDERS"
+									:key="provider.id"
+									:value="provider.id"
+									:label="modelProviderLabel(provider)"
+								/>
+							</N8nSelect>
+						</N8nInputLabel>
+
+						<N8nInputLabel
+							v-if="
+								modelProvider === 'custom' &&
+								!modelConnectionLocked &&
+								!selectedExistingCredentialId
+							"
+							:class="$style.compactLabel"
+							:label="i18n.baseText('instanceAi.onboarding.model.baseUrl')"
+							input-name="assistant-model-base-url"
+						>
+							<N8nInput
+								id="assistant-model-base-url"
+								v-model="modelBaseUrl"
+								class="ph-no-capture"
+								type="text"
+								autocomplete="off"
+								:spellcheck="false"
+								placeholder="http://ollama.internal:11434/v1"
+								data-test-id="assistant-model-base-url"
+							/>
+						</N8nInputLabel>
+
+						<N8nInputLabel
+							:class="$style.compactLabel"
+							:label="i18n.baseText('instanceAi.onboarding.model.apiKey')"
+							input-name="assistant-model-api-key"
+						>
+							<N8nInput
+								id="assistant-model-api-key"
+								v-model="modelApiKey"
+								class="ph-no-capture"
+								type="password"
+								autocomplete="off"
+								:spellcheck="false"
+								:disabled="
+									modelConnectionLocked || readOnly || Boolean(selectedExistingCredentialId)
+								"
+								:placeholder="
+									modelConnectionLocked || readOnly || selectedExistingCredentialId
+										? STATIC_SECRET_MASK
+										: modelConfig.placeholder
+								"
+								:data-test-id="
+									surface === 'settings'
+										? 'n8n-agent-model-api-key-input'
+										: 'assistant-model-api-key'
+								"
+							/>
+						</N8nInputLabel>
+
+						<N8nInputLabel
+							:class="$style.compactLabel"
+							:label="i18n.baseText('instanceAi.onboarding.model.model')"
+							input-name="assistant-model-name"
+						>
+							<N8nSelect
+								v-if="modelOptions.length && !modelNameLocked"
+								id="assistant-model-name"
+								:model-value="modelName"
+								:teleported="true"
+								filterable
+								:disabled="readOnly"
+								:data-test-id="
+									surface === 'settings' ? 'n8n-agent-model-name-input' : 'assistant-model-name'
+								"
+								@update:model-value="modelName = String($event ?? '')"
+							>
+								<N8nOption
+									v-for="model in modelOptions"
+									:key="model.id"
+									:value="model.id"
+									:label="
+										model.recommended
+											? `${model.name} · ${i18n.baseText('instanceAi.onboarding.recommended')}`
+											: model.name
+									"
+								/>
+							</N8nSelect>
+							<N8nInput
+								v-else
+								id="assistant-model-name"
+								v-model="modelName"
+								class="ph-no-capture"
+								:disabled="modelNameLocked || readOnly"
+								:placeholder="modelNameLocked ? STATIC_SECRET_MASK : 'qwen3-coder'"
+								:spellcheck="false"
+								:data-test-id="
+									surface === 'settings' ? 'n8n-agent-model-name-input' : 'assistant-model-name'
+								"
+							/>
+						</N8nInputLabel>
+						<N8nText
+							v-if="modelProvider === 'anthropic' && !modelNameLocked"
+							step="xs"
+							color="text-light"
+							:class="$style.fieldHint"
+						>
+							{{ i18n.baseText('instanceAi.onboarding.model.anthropicHint') }}
+						</N8nText>
+					</div>
+
+					<N8nCallout
 						v-if="
 							modelProvider === 'custom' && !modelConnectionLocked && !selectedExistingCredentialId
 						"
-						:class="$style.compactLabel"
-						:label="i18n.baseText('instanceAi.onboarding.model.baseUrl')"
-						input-name="assistant-model-base-url"
+						theme="warning"
+						icon="triangle-alert"
 					>
-						<N8nInput
-							id="assistant-model-base-url"
-							v-model="modelBaseUrl"
-							class="ph-no-capture"
-							type="text"
-							autocomplete="off"
-							:spellcheck="false"
-							placeholder="http://ollama.internal:11434/v1"
-							data-test-id="assistant-model-base-url"
-						/>
-					</N8nInputLabel>
-
-					<N8nInputLabel
-						:class="$style.compactLabel"
-						:label="i18n.baseText('instanceAi.onboarding.model.apiKey')"
-						input-name="assistant-model-api-key"
-					>
-						<N8nInput
-							id="assistant-model-api-key"
-							v-model="modelApiKey"
-							class="ph-no-capture"
-							type="password"
-							autocomplete="off"
-							:spellcheck="false"
-							:disabled="modelConnectionLocked || readOnly || Boolean(selectedExistingCredentialId)"
-							:placeholder="
-								modelConnectionLocked || readOnly || selectedExistingCredentialId
-									? STATIC_SECRET_MASK
-									: modelConfig.placeholder
-							"
-							:data-test-id="
-								surface === 'settings' ? 'n8n-agent-model-api-key-input' : 'assistant-model-api-key'
-							"
-						/>
-					</N8nInputLabel>
-
-					<N8nInputLabel
-						:class="$style.compactLabel"
-						:label="i18n.baseText('instanceAi.onboarding.model.model')"
-						input-name="assistant-model-name"
-					>
-						<N8nSelect
-							v-if="modelOptions.length && !modelNameLocked"
-							id="assistant-model-name"
-							:model-value="modelName"
-							:teleported="true"
-							filterable
-							:disabled="readOnly"
-							:data-test-id="
-								surface === 'settings' ? 'n8n-agent-model-name-input' : 'assistant-model-name'
-							"
-							@update:model-value="modelName = String($event ?? '')"
-						>
-							<N8nOption
-								v-for="model in modelOptions"
-								:key="model.id"
-								:value="model.id"
-								:label="
-									model.recommended
-										? `${model.name} · ${i18n.baseText('instanceAi.onboarding.recommended')}`
-										: model.name
-								"
-							/>
-						</N8nSelect>
-						<N8nInput
-							v-else
-							id="assistant-model-name"
-							v-model="modelName"
-							class="ph-no-capture"
-							:disabled="modelNameLocked || readOnly"
-							:placeholder="modelNameLocked ? STATIC_SECRET_MASK : 'qwen3-coder'"
-							:spellcheck="false"
-							:data-test-id="
-								surface === 'settings' ? 'n8n-agent-model-name-input' : 'assistant-model-name'
-							"
-						/>
-					</N8nInputLabel>
-					<N8nText
-						v-if="modelProvider === 'anthropic' && !modelNameLocked"
-						step="xs"
-						color="text-light"
-						:class="$style.fieldHint"
-					>
-						{{ i18n.baseText('instanceAi.onboarding.model.anthropicHint') }}
-					</N8nText>
-				</div>
-
-				<N8nCallout
-					v-if="
-						modelProvider === 'custom' && !modelConnectionLocked && !selectedExistingCredentialId
-					"
-					theme="warning"
-					icon="triangle-alert"
-				>
-					{{ i18n.baseText('instanceAi.onboarding.model.weakModelWarning') }}
-				</N8nCallout>
+						{{ i18n.baseText('instanceAi.onboarding.model.weakModelWarning') }}
+					</N8nCallout>
+				</template>
 			</template>
 
 			<template v-else-if="step === 'sandbox'">

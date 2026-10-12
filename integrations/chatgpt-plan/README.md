@@ -4,14 +4,17 @@ This experimental integration connects self-hosted n8n Assistant to ChatGPT plan
 
 ## Deployment
 
-The stack uses n8n 2.42.6 with a small, version-checked runtime overlay. The matching source changes are in the agents model factory and instance-ai workspace file helpers. A full monorepo build is unnecessary for this pinned deployment. Review the overlay before changing n8n versions; it deliberately fails on a different version or factory layout.
+The stack uses n8n 2.42.6 with a small, version-checked runtime overlay. The matching source changes include the model factory, workspace file helpers, native model dialog, and owner/admin settings endpoints. A full monorepo build is unnecessary for this pinned deployment. Review the overlay before changing n8n versions; it deliberately fails on a different version or factory layout.
 
 Use Node 24+, Docker Compose, and a private environment file outside the fork. Copy `.env.example`, generate a distinct random value for every secret, and create `CHATGPT_AUTH_DIR` owned by UID 1000 with mode `0700`. Set `N8N_BIND_IP` to a private interface; the default is loopback.
 
 ```sh
+node build-native-ui.mjs
 docker compose --env-file /absolute/private/path/stack.env up -d --build
 docker compose --env-file /absolute/private/path/stack.env ps
 ```
+
+The native build script creates a reserved worktree from the exact n8n 2.42.6 tag. It applies only this feature's frontend changes. It installs filtered frontend dependencies and caps build memory. It compiles the connection helper from its TypeScript source. Generated assets stay out of Git. The image installer checks its version and source anchors.
 
 This project has its own SQLite volume. Sandbox ports are internal. The privileged Docker-in-Docker runner executes n8n's local workflow tools. HTTP and insecure cookies are development settings; use TLS and secure cookies for an internet deployment. OAuth credentials are mounted only into the bridge.
 
@@ -31,7 +34,11 @@ The controller requires Python 3.10+, Paramiko, a trusted SSH host key, and `N8N
 python tools/local-oauth-controller.py
 ```
 
-Open `http://127.0.0.1:1455`, choose **Continue with ChatGPT**, complete authorization, and select a model. Use a reasoning model supporting text and local function tools; the default is `gpt-6.1-sol`. The alias forces the SDK's reasoning model behavior. Return to n8n Assistant and send a small request after the page confirms a saved, authorized connection.
+Open n8n **Settings > Assistant > Model**, or select **Model** during Assistant setup. The native **Connect a model** dialog shows **ChatGPT subscription** and **Continue with ChatGPT**. Complete sign-in in the new tab. Return to the same n8n dialog, select a model from the account's catalog, and select **Save**. The dialog checks the connection while sign-in is open. Save stays disabled until the connection and catalog are available. A saved catalog model is required before setup treats this subscription as configured.
+
+Use a reasoning model that supports text and local function tools. A model change takes effect through the bridge without an n8n restart. The native settings routes require the instanceAi:manage scope. Members and unauthenticated clients cannot manage the shared connection. Tokens and the bridge key never reach the frontend. Other API-key providers keep their existing form.
+
+The loopback page at http://127.0.0.1:1455 remains available for local diagnostics. The OAuth callback still uses that exact address. Start normal setup from the n8n form.
 
 OpenAI documents this third-party capability for eligible Plus and Pro users. Free access is not documented, and account, workspace, rollout, model, and region policies still apply. See the [release details](https://learn.chatgpt.com/docs/whats-new/devday-2026).
 
@@ -78,9 +85,13 @@ python3 test/local-controller-wire.py
 sh test/run-assistant-smoke.sh
 ```
 
-The 31 focused tests cover request adaptation, real JWT validation, state/PKCE, credential permissions, rotating refresh, recovery, exchange-file transfer, origins, provider errors, attachment sizes, and stream cancellation. The Python wire test verifies exact form encoding and PKCE against a single-use test endpoint, error preservation, and redirect refusal.
+The 34 focused bridge tests cover request adaptation, real JWT validation, state/PKCE, credential permissions, rotating refresh, recovery, exchange-file transfer, origins, provider errors, attachment sizes, and stream cancellation. The Python wire test verifies exact form encoding and PKCE against a single-use test endpoint, error preservation, and redirect refusal.
 
 The Assistant smoke test uses the actual pinned n8n image, model factory, SDK, Assistant REST/SSE, workflow adapter, sandbox, and a disposable SQLite database. The real SDK also checks a plan-limit error received inside SSE during a non-streaming probe. It retains the status, code, request ID, and retry delay. It seeds a fake owner/workflow, follows local tools, replays encrypted reasoning, and checks a later conversation turn, then compiles a TypeScript workflow in the real sandbox and confirms its SQLite save. It also checks the native file helpers against the service request budget. It never calls OpenAI and never creates an owner in the deployed instance. The mock supplies deterministic model responses; it verifies integration contracts, not reasoning quality or plan admission.
+
+Nine native dialog tests cover setup, sign-in, blocked tabs, URL checks, reconnect completion, polling cleanup, model saving, catalog rejection, and settings refresh failure. The existing 34 model wizard and connection dialog tests also pass. The changed frontend files pass ESLint. The pinned frontend build and reproducible build script pass. A full frontend typecheck exceeded the 3.5 GiB heap budget on this VM.
+
+The Assistant smoke test also verifies native settings with a real owner and member in its disposable database. It checks anonymous/member denial, safe status, catalog access, and model selection.
 
 Full monorepo checks and live paid-plan inference have not been run. A successful real OAuth exchange and Responses request remain necessary before relying on the integration.
 

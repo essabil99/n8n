@@ -64,12 +64,12 @@ export async function createServers({
 		logger: false,
 		bodyLimit: 32 * 1024 * 1024,
 		requestTimeout: 300_000,
-		ajv: { customOptions: { coerceTypes: false } },
+		ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
 	});
 	const admin = Fastify({
 		logger: false,
 		bodyLimit: 16_384,
-		ajv: { customOptions: { coerceTypes: false } },
+		ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
 	});
 	infer.setErrorHandler(errorHandler);
 	admin.setErrorHandler(errorHandler);
@@ -167,6 +167,58 @@ export async function createServers({
 		);
 	}
 
+	let latestSignIn;
+	function startSignIn() {
+		const url = store.start(redirectUri);
+		latestSignIn = {
+			state: new URL(url).searchParams.get('state'),
+			expires: Date.now() + 10 * 60_000,
+			finished: false,
+		};
+		return { url };
+	}
+	function connectionStatus() {
+		const status = store.status();
+		return {
+			authenticated: status.authenticated,
+			plan_authorized: status.plan_authorized,
+			reauthorization_required: status.reauthorization_required,
+			model: store.credentials?.model ?? '',
+			sign_in_pending: Boolean(
+				latestSignIn && !latestSignIn.finished && latestSignIn.expires > Date.now(),
+			),
+		};
+	}
+	async function selectModel(request) {
+		if (!(await catalog()).some((item) => item.slug === request.body.model))
+			throw new BridgeError(
+				400,
+				'model_unavailable',
+				'Choose a model from this account’s catalog.',
+			);
+		await store.save({ ...store.credentials, model: request.body.model });
+		return { model: request.body.model };
+	}
+	const modelSelectionSchema = {
+		body: {
+			type: 'object',
+			required: ['model'],
+			additionalProperties: false,
+			properties: { model: { type: 'string', minLength: 1, maxLength: 128 } },
+		},
+	};
+	infer.get('/v1/connection/status', async (request, reply) => {
+		reply.header('Cache-Control', 'no-store');
+		return connectionStatus();
+	});
+	infer.post('/v1/connection/start', async (request, reply) => {
+		reply.header('Cache-Control', 'no-store');
+		return startSignIn();
+	});
+	infer.get('/v1/connection/models', async () => ({
+		models: (await catalog()).map(({ slug, display_name }) => ({ slug, display_name })),
+	}));
+	infer.post('/v1/connection/model', { schema: modelSelectionSchema }, selectModel);
 	infer.get('/healthz', async () => ({ status: 'ok', ...store.status() }));
 	infer.get('/v1/models', async () => ({
 		object: 'list',
@@ -217,35 +269,16 @@ export async function createServers({
 		model: store.credentials?.model ?? model,
 		last_auth_error: store.lastAuthError ?? null,
 	}));
-	admin.post('/auth/start', async () => ({ url: store.start(redirectUri) }));
+	admin.post('/auth/start', async () => startSignIn());
 	admin.get('/auth/callback', async (request, reply) => {
-		await store.exchange(request.query);
-		return reply.redirect('/?connected=1');
+		try {
+			await store.exchange(request.query);
+			return reply.redirect('/?connected=1');
+		} finally {
+			if (latestSignIn?.state === request.query.state) latestSignIn.finished = true;
+		}
 	});
 	admin.get('/auth/models', async () => ({ models: await catalog() }));
-	admin.post(
-		'/auth/model',
-		{
-			schema: {
-				body: {
-					type: 'object',
-					required: ['model'],
-					additionalProperties: false,
-					properties: { model: { type: 'string', minLength: 1, maxLength: 128 } },
-				},
-			},
-		},
-		async (request) => {
-			if (!(await catalog()).some((item) => item.slug === request.body.model)) {
-				throw new BridgeError(
-					400,
-					'model_unavailable',
-					'Choose a model from this account’s catalog.',
-				);
-			}
-			await store.save({ ...store.credentials, model: request.body.model });
-			return { model: request.body.model };
-		},
-	);
+	admin.post('/auth/model', { schema: modelSelectionSchema }, selectModel);
 	return { infer, admin };
 }

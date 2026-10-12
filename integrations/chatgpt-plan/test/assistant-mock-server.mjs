@@ -11,6 +11,7 @@ const store = new TokenStore(directory);
 await store.init();
 await store.save({
 	subject: 'mock-account',
+	model: 'gpt-6.1-sol',
 	client_id: 'oaiapp_mock',
 	scopes: [PLAN_SCOPE],
 	access_token: 'mock-oauth-access',
@@ -30,6 +31,13 @@ const status = {
 	toolCalls: [],
 };
 const upstream = async (url, options) => {
+	if (url === 'https://api.openai.com/v1/models')
+		return Response.json({
+			models: [
+				{ slug: 'gpt-6.1-sol', display_name: 'Fixture model', visibility: 'list' },
+				{ slug: 'fixture-second', display_name: 'Second fixture', visibility: 'list' },
+			],
+		});
 	assert.equal(url, 'https://api.openai.com/v1/responses');
 	assert.equal(options.headers.Authorization, 'Bearer mock-oauth-access');
 	const body = JSON.parse(options.body);
