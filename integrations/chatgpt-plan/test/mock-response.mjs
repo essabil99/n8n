@@ -136,3 +136,17 @@ export function mockResponse({ id, name, arguments: args, text = 'OK' }) {
 		{ headers: { 'Content-Type': 'text/event-stream' } },
 	);
 }
+
+// This failure starts after HTTP 200, so the bridge must read the SSE error.
+export function mockPlanLimit() {
+	return new Response(
+		`data: ${JSON.stringify({ type: 'error', code: 'subscription_sharing_usage_limit_exceeded', message: 'Mock ChatGPT plan limit reached.', param: 'model', sequence_number: 0 })}\n\n`,
+		{
+			headers: {
+				'Content-Type': 'text/event-stream',
+				'X-Request-Id': 'req-mock-plan-limit',
+				'Retry-After': '120',
+			},
+		},
+	);
+}

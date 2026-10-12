@@ -40,11 +40,26 @@ async function main() {
 	const steps = await result.steps;
 	assert.equal(steps.length, 2);
 	console.log('n8n streamed tool round trip: passed');
+	await assert.rejects(
+		generateText({ model, prompt: 'PROBE_STREAM_LIMIT', maxRetries: 0 }),
+		(error) => {
+			assert.equal(error.statusCode, 429);
+			assert.equal(error.responseHeaders['x-request-id'], 'req-mock-plan-limit');
+			assert.equal(error.responseHeaders['retry-after'], '120');
+			assert.equal(
+				JSON.parse(error.responseBody).error.code,
+				'subscription_sharing_usage_limit_exceeded',
+			);
+			return true;
+		},
+	);
+	console.log('Real n8n model setup surfaces streamed plan limits and request IDs: passed');
 	const status = await fetch(url.replace('/v1', '/smoke-status'), {
 		headers: { Authorization: `Bearer ${apiKey}` },
 	}).then((r) => r.json());
-	assert.equal(status.requests, 3);
-	console.log('Three requests used Responses with full history and namespaced tools.');
+	assert.equal(status.requests, 4);
+	assert.equal(status.planLimits, 1);
+	console.log('Four requests used Responses, including one preserved plan-limit failure.');
 }
 main().catch((error) => {
 	console.error(error.message);

@@ -157,6 +157,7 @@ async function main() {
 	const status = await fetch(bridge + '/smoke-status', {
 		headers: { Authorization: `Bearer ${key}` },
 	}).then((response) => response.json());
+	assert.equal(status.planLimits, 1);
 	assert.equal(status.workflowResults, 1);
 	assert.equal(status.buildResults, 1);
 	assert.ok(status.toolCalls.includes('load_tool'));

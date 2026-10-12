@@ -3,7 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { readFile } from 'node:fs/promises';
 import { BridgeError, RESOURCE } from './auth.mjs';
-import { normalizeRequest, collectResponse } from './protocol.mjs';
+import { normalizeRequest, collectResponse, UpstreamError } from './protocol.mjs';
 
 const REQUEST_SCHEMA = {
 	type: 'object',
@@ -20,16 +20,6 @@ const REQUEST_SCHEMA = {
 	},
 	additionalProperties: true,
 };
-
-class UpstreamError extends Error {
-	constructor(status, body, headers) {
-		super('ChatGPT rejected the request.');
-		this.status = status;
-		this.body = body;
-		this.requestId = headers.get('x-request-id');
-		this.retryAfter = headers.get('retry-after');
-	}
-}
 
 function errorHandler(error, request, reply) {
 	if (error instanceof UpstreamError) {
@@ -155,11 +145,11 @@ export async function createServers({
 			throw new UpstreamError(response.status, body, response.headers);
 		}
 
-		return response;
+		return { response, token };
 	}
 
 	async function catalog() {
-		const response = await call('/models');
+		const { response } = await call('/models');
 		let value;
 		try {
 			value = await response.json();
@@ -191,7 +181,7 @@ export async function createServers({
 		reply.raw.once('close', () => {
 			if (!reply.raw.writableFinished) controller.abort();
 		});
-		const upstream = await call('/responses', {
+		const { response: upstream, token } = await call('/responses', {
 			method: 'POST',
 			body: JSON.stringify(normalized),
 			signal: AbortSignal.any([controller.signal, AbortSignal.timeout(300_000)]),
@@ -204,13 +194,15 @@ export async function createServers({
 				'ChatGPT did not return the required response stream.',
 			);
 		}
+		const requestId = upstream.headers.get('x-request-id');
+		if (requestId) reply.header('X-Request-Id', requestId);
 		if (request.body.stream) {
 			return reply
 				.header('Content-Type', 'text/event-stream')
 				.header('Cache-Control', 'no-store')
 				.send(Readable.fromWeb(upstream.body));
 		}
-		return collectResponse(upstream.body);
+		return collectResponse(upstream.body, { headers: upstream.headers, secrets: [token, apiKey] });
 	});
 	admin.get('/', async (request, reply) =>
 		reply.type('text/html').send(await readFile(new URL('./index.html', import.meta.url), 'utf8')),

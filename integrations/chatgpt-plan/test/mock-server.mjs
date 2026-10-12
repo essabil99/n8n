@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TokenStore, PLAN_SCOPE } from '../src/auth.mjs';
 import { createServers } from '../src/server.mjs';
+import { mockPlanLimit } from './mock-response.mjs';
 
 const directory = await mkdtemp(join(tmpdir(), 'n8n-sdk-smoke-'));
 const store = new TokenStore(directory);
@@ -18,6 +19,7 @@ await store.save({
 	expires_at: Date.now() + 3_600_000,
 });
 let requests = 0;
+let planLimits = 0;
 const upstream = async (url, options) => {
 	assert.equal(url, 'https://api.openai.com/v1/responses');
 	assert.equal(options.headers.Authorization, 'Bearer mock-oauth-access');
@@ -28,6 +30,10 @@ const upstream = async (url, options) => {
 	assert.equal(body.max_output_tokens, undefined);
 	assert.equal(body.previous_response_id, undefined);
 	requests++;
+	if (JSON.stringify(body.input).includes('PROBE_STREAM_LIMIT')) {
+		planLimits++;
+		return mockPlanLimit();
+	}
 	const isTool = body.tools?.length > 0;
 	const hasOutput = body.input.some((item) => item.type === 'function_call_output');
 	if (isTool) {
@@ -149,6 +155,7 @@ const { infer } = await createServers({
 	fetchImpl: upstream,
 });
 infer.addHook('onError', async (request, reply, error) => {
+	if (error.body?.error?.code === 'subscription_sharing_usage_limit_exceeded') return;
 	console.error(
 		'Mock request failure:',
 		request.url,
@@ -157,5 +164,5 @@ infer.addHook('onError', async (request, reply, error) => {
 	);
 	console.error('Mock request body:', JSON.stringify(request.body));
 });
-infer.get('/smoke-status', async () => ({ requests }));
+infer.get('/smoke-status', async () => ({ requests, planLimits }));
 await infer.listen({ host: '0.0.0.0', port: 3210 });

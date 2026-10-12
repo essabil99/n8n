@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TokenStore, PLAN_SCOPE } from '../src/auth.mjs';
 import { createServers } from '../src/server.mjs';
-import { mockResponse } from './mock-response.mjs';
+import { mockResponse, mockPlanLimit } from './mock-response.mjs';
 
 const directory = await mkdtemp(join(tmpdir(), 'n8n-assistant-mock-'));
 const store = new TokenStore(directory);
@@ -24,6 +24,7 @@ const status = {
 	buildResults: 0,
 	followups: 0,
 	rawStoreFalse: 0,
+	planLimits: 0,
 	reasoningEfforts: [],
 	errors: [],
 	toolCalls: [],
@@ -60,6 +61,10 @@ const upstream = async (url, options) => {
 				: item.content?.map((part) => part.text ?? '').join(''),
 		)
 		.join('\n');
+	if (text.includes('PROBE_STREAM_LIMIT')) {
+		status.planLimits++;
+		return mockPlanLimit();
+	}
 	const call = (name, args) => {
 		assert.ok(names.has(name), `Required tool missing: ${name}`);
 		status.toolCalls.push(name);
@@ -144,6 +149,7 @@ infer.addHook('preHandler', async (request) => {
 	if (request.url === '/v1/responses' && request.body.store === false) status.rawStoreFalse++;
 });
 infer.addHook('onError', async (request, reply, error) => {
+	if (error.body?.error?.code === 'subscription_sharing_usage_limit_exceeded') return;
 	status.errors.push(error.message);
 	console.error('Mock contract failure:', error.message);
 });

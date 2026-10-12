@@ -1,6 +1,6 @@
 # ChatGPT plan connection for n8n Assistant
 
-This experimental integration connects self-hosted n8n Assistant to ChatGPT plan usage through documented OpenAI OAuth. Requests use the subscription's limits; there is no billable API-key fallback. Live authorization is currently blocked by OpenAI returning `invalid_grant`. Do not treat the passing mock tests as proof of live account access.
+This experimental integration connects self-hosted n8n Assistant to ChatGPT plan usage through documented OpenAI OAuth. Requests use the subscription's limits; there is no billable API-key fallback.
 
 ## Deployment
 
@@ -19,7 +19,7 @@ This project has its own SQLite volume. Sandbox ports are internal. The privileg
 
 Create the n8n owner account first. The Assistant endpoint is configured at startup, while ChatGPT authorization is a separate operator action. This prototype has one ChatGPT connection shared by everyone with Assistant access in the instance.
 
-For this Windows-to-VM deployment, run both the tunnel and the OAuth controller on the browser computer. Initial code exchange happens there, and its protected result returns over SSH. Identity validation, token storage, refresh, n8n, and inference stay on the VM. This follows the [VM sign-in guidance](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms); changing exchange location alone did not resolve the observed rejection.
+For this Windows-to-VM deployment, run both the tunnel and the OAuth controller on the browser computer. Initial code exchange happens there, and its protected result returns over SSH. Identity validation, token storage, refresh, n8n, and inference stay on the VM. This follows the [VM sign-in guidance](https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms).
 
 ```sh
 ssh -N -L 1455:127.0.0.1:1455 saad@100.64.63.105
@@ -33,7 +33,7 @@ python tools/local-oauth-controller.py
 
 Open `http://127.0.0.1:1455`, choose **Continue with ChatGPT**, complete authorization, and select a model. Use a reasoning model supporting text and local function tools; the default is `gpt-6.1-sol`. The alias forces the SDK's reasoning model behavior. Return to n8n Assistant and send a small request after the page confirms a saved, authorized connection.
 
-OpenAI documents this third-party capability for eligible Plus and Pro users. Free access is not documented, and account, workspace, rollout, model, and region policies still apply. Buying a plan is not established to fix `invalid_grant`. See the [release details](https://learn.chatgpt.com/docs/whats-new/devday-2026).
+OpenAI documents this third-party capability for eligible Plus and Pro users. Free access is not documented, and account, workspace, rollout, model, and region policies still apply. See the [release details](https://learn.chatgpt.com/docs/whats-new/devday-2026).
 
 ## Authentication and recovery
 
@@ -43,7 +43,7 @@ One-time codes and rotating refresh grants are sent once per attempt. The contro
 
 A valid identity without plan permission remains signed in with inference disabled. Terminal refresh errors clear unusable access/refresh tokens while retaining the validated profile and client registration for reconnection. Temporary errors retain credentials. These behaviors follow the [recovery guidance](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery).
 
-Safe status diagnostics are at `/auth/status`; detailed redacted diagnostics are in the private `last-oauth-error.json`. No authorization code, verifier, bearer token, or submitted client ID is logged there. Repeated `invalid_grant` without a description remains unresolved; preserve its request ID for provider investigation instead of replaying codes or changing client identity. Disconnect the app through ChatGPT settings to revoke access.
+Safe status diagnostics are at `/auth/status`; detailed redacted diagnostics are in the private `last-oauth-error.json`. No authorization code, verifier, bearer token, or submitted client ID is logged there. If OpenAI rejects a grant, retain its request ID for diagnosis. Start a fresh authorization with the saved registration. Do not replay codes or change client identity. Disconnect the app through ChatGPT settings to revoke access.
 
 ## Assistant compatibility
 
@@ -63,7 +63,7 @@ The bridge streams upstream, collects completed SSE for non-streaming setup prob
 
 Images and inline files retain their content. The bridge accepts bodies up to 32 MiB, covering n8n's 16 MiB combined attachment allowance plus message overhead. Longer histories still need to fit this bound. Models must support the supplied modality. Files uploads, embeddings, audio, hosted code execution, and other API endpoints are outside this integration.
 
-Provider failures preserve HTTP status, JSON body shape, error code/parameter, request ID, and retry delay. Streamed failures remain streamed. Subscription limits stop inference with no paid fallback. Model selection uses the signed-in catalog. See [plan inference requirements](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
+Provider failures preserve HTTP status, JSON body shape, error code/parameter, request ID, and retry delay. Streamed failures remain streamed. Non-streaming model checks retain errors received inside SSE, including plan-limit codes and retry delays. Successful streams retain the provider request ID. A disconnected n8n client cancels its upstream inference request. Subscription limits stop inference with no paid fallback. Model selection uses the signed-in catalog. See [plan inference requirements](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference).
 
 ## Verification
 
@@ -78,9 +78,9 @@ python3 test/local-controller-wire.py
 sh test/run-assistant-smoke.sh
 ```
 
-The 27 focused tests cover request adaptation, real JWT validation, state/PKCE, credential permissions, rotating refresh, recovery, exchange-file transfer, origins, provider errors, and attachment sizes. The Python wire test verifies exact form encoding and PKCE against a single-use test endpoint, error preservation, and redirect refusal.
+The 31 focused tests cover request adaptation, real JWT validation, state/PKCE, credential permissions, rotating refresh, recovery, exchange-file transfer, origins, provider errors, attachment sizes, and stream cancellation. The Python wire test verifies exact form encoding and PKCE against a single-use test endpoint, error preservation, and redirect refusal.
 
-The Assistant smoke test uses the actual pinned n8n image, model factory, SDK, Assistant REST/SSE, workflow adapter, sandbox, and a disposable SQLite database. It seeds a fake owner/workflow, follows local tools, replays encrypted reasoning, and checks a later conversation turn, then compiles a TypeScript workflow in the real sandbox and confirms its SQLite save. It also checks the native file helpers against the service request budget. It never calls OpenAI and never creates an owner in the deployed instance. The mock supplies deterministic model responses; it verifies integration contracts, not reasoning quality or plan admission.
+The Assistant smoke test uses the actual pinned n8n image, model factory, SDK, Assistant REST/SSE, workflow adapter, sandbox, and a disposable SQLite database. The real SDK also checks a plan-limit error received inside SSE during a non-streaming probe. It retains the status, code, request ID, and retry delay. It seeds a fake owner/workflow, follows local tools, replays encrypted reasoning, and checks a later conversation turn, then compiles a TypeScript workflow in the real sandbox and confirms its SQLite save. It also checks the native file helpers against the service request budget. It never calls OpenAI and never creates an owner in the deployed instance. The mock supplies deterministic model responses; it verifies integration contracts, not reasoning quality or plan admission.
 
 Full monorepo checks and live paid-plan inference have not been run. A successful real OAuth exchange and Responses request remain necessary before relying on the integration.
 

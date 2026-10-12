@@ -7,7 +7,7 @@ SMOKE_NETWORK=${SMOKE_NETWORK:-n8n-chatgpt-oauth_default}
 chmod 0644 test/mock-server.mjs test/n8n-sdk-smoke.cjs
 docker run -d --rm --name n8n-chatgpt-sdk-smoke --network "$SMOKE_NETWORK" --memory 256m \
   -e CHATGPT_BRIDGE_API_KEY=mock-bridge-key-with-more-than-24-characters \
-  -v "$PWD/test/mock-server.mjs:/app/test/mock-server.mjs:ro" \
+  -v "$PWD/test:/app/test:ro" \
   "$BRIDGE_IMAGE" node test/mock-server.mjs >/dev/null
 trap 'docker stop n8n-chatgpt-sdk-smoke >/dev/null 2>&1 || true' EXIT
 docker cp test/n8n-sdk-smoke.cjs "$N8N_CONTAINER":/tmp/n8n-sdk-smoke.cjs
